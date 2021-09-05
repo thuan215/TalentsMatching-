@@ -1,7 +1,7 @@
 ---
 title: "Talent matching modelling"
-author: "Thuan Yen Tran"
-date: "9/5/2021"
+author: "Thuan"
+date: "4/5/2021"
 output: html_document
 ---
 
@@ -109,11 +109,6 @@ extract_profiles<-function(talent_pool,roles){
 ##STEP 3: Query for the targetted profiles
 ```{r 3}
 # profile taxonomy
-analyst<-c("data analyst", "data analist", "data specialist", "data", "business intelligence")
-
-it<-c("business analist","project manager","business analyst",
-      "product_owner","ux designer", "user experience")
-
 devs<-c("developer","software engineer","programmer")
 
 nonit<-c("sales","business manager")
@@ -125,17 +120,11 @@ profiles_dev<-profiles_dev[,colSums(profiles_dev[,-1])>0.05*nrow(profiles_dev),w
 profiles_dev$target_var<-rep(1,nrow(profiles_dev)) #assign label=1 to dev profiles
 
 ## Extract other profiles
-profiles_it<-extract_profiles(talent_pool = talent_bigset,roles = it)
-profiles_analyst<-extract_profiles(talent_pool = talent_bigset,roles = analyst)
 profiles_nonit<-extract_profiles(talent_pool = talent_bigset,roles = nonit)
 
-profiles_others<-bind_rows(profiles_it, profiles_analyst, profiles_nonit)
-  ### Filter for the skills that appear in at least x% of all the profiles
+### Filter for the skills that appear in at least x% of all the profiles
 profiles_others<-profiles_others[,colSums(profiles_others[,-1])>0.05*nrow(profiles_others),with=FALSE]
-profiles_others$target_var<-rep(0,nrow(profiles_others)) #assign label=0 to other profiles
-
-## Filter for the skills that appear in at least x% of all the profiles
-profiles<-profiles[,colSums(profiles[,-1])>0.05*nrow(profiles),with=FALSE]
+profiles_others$target_var<-rep(2,nrow(profiles_others)) #assign label=2 to other profiles
 
 ## Combine individual data tables into one
 profiles_final<-bind_rows(profiles_dev, profiles_others)
