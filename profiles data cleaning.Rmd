@@ -1,5 +1,9 @@
 ---
+<<<<<<< HEAD
 title: "Talent matching modelling"
+=======
+title: "Talent matching data cleaning"
+>>>>>>> bb7499fd8a81adf718dae83a3930d11a5483953d
 author: "Thuan"
 date: "4/5/2021"
 output: html_document
@@ -117,12 +121,16 @@ nonit<-c("sales","business manager")
 profiles_dev<-extract_profiles(talent_pool = talent_bigset,roles = devs)
   ### Filter for the skills that appear in at least x% of all the profiles
 profiles_dev<-profiles_dev[,colSums(profiles_dev[,-1])>0.05*nrow(profiles_dev),with=FALSE]
-profiles_dev$target_var<-rep(1,nrow(profiles_dev)) #assign label=1 to dev profiles
+profiles_dev$target_var<-rep(0,nrow(profiles_dev)) #assign label=0 to dev profiles
 
 ## Extract other profiles
 profiles_nonit<-extract_profiles(talent_pool = talent_bigset,roles = nonit)
 
+<<<<<<< HEAD
 ### Filter for the skills that appear in at least x% of all the profiles
+=======
+  ### Filter for the skills that appear in at least x% of all the profiles
+>>>>>>> bb7499fd8a81adf718dae83a3930d11a5483953d
 profiles_others<-profiles_others[,colSums(profiles_others[,-1])>0.05*nrow(profiles_others),with=FALSE]
 profiles_others$target_var<-rep(2,nrow(profiles_others)) #assign label=2 to other profiles
 
@@ -132,7 +140,7 @@ profiles_final<-bind_rows(profiles_dev, profiles_others)
 
 ## Save to csv
 ```{r 5}
-write.csv(profiles_final,"profiles_final.csv", row.names = FALSE)
+write.csv(profiles_final,"C:/Users/ASUS/OneDrive/Talent matching project/profiles_final.csv", row.names = FALSE)
 ```
 
 
