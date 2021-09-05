@@ -137,7 +137,7 @@ profiles_final<-bind_rows(profiles_dev, profiles_others)
 
 ## Save to csv
 ```{r 5}
-write.csv(profiles_final,"profiles_final.csv", row.names = FALSE)
+write.csv(profiles_final,"C:/Users/ASUS/OneDrive/Talent matching project/profiles_final.csv", row.names = FALSE)
 ```
 
 
