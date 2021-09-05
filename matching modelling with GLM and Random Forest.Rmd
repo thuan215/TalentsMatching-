@@ -1,0 +1,249 @@
+---
+title: "Talent Matching modelling"
+author: "Thuan"
+date: "4/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+Import data and split train set
+
+```{r 1, warning=FALSE,message=FALSE}
+#Load packages
+library(data.table)
+library(RJSONIO)
+library(mltools)
+library(dplyr)
+library(caret)
+library(ranger)
+library("plyr")
+
+data<-read.csv("C:/Users/ASUS/OneDrive/Talent matching project/profiles_final.csv")
+
+data<-data[,!names(data)%in%c("X","working_years")] #remove objectid
+
+#Cross industry modelling: matching between a developer and a business role
+data_balance<-rbind(head(data[data$target_var==2,],4914),
+                    data[data$target_var==0,]) #ensure class balance
+
+data_balance[is.na(data_balance)]<-0
+data_balance<-data_balance[ ,colSums(data_balance)!=0]
+
+#convert target values: dev=1,nonit=0
+data_balance$target_var<-mapvalues(data_balance$target_var, from = c(0,2), to = c(1,0))
+
+#Split train test
+set.seed(123)
+sample <- sample.int(n = nrow(data_balance), size = floor(.8*nrow(data_balance)), replace = F)
+train <- data_balance[sample, ]
+test  <- data_balance[-sample, ]
+
+dim(train)
+dim(test)
+```
+
+## GLM model
+
+```{r 2, echo=FALSE, message=FALSE}
+###############TRAIN GLM
+glm.fit<-glm(as.factor(target_var)~.,data=train,family="binomial")
+glm.probs <- predict(glm.fit,test,type = "response")
+
+glm.class<-ifelse(glm.probs<0.5,0,1)#predict
+
+#model performances
+brier_score = sqrt(mean((test$target_var-glm.probs)^2))
+mean(glm.class==test$target_var) #accuracy
+mean(abs(test$target_var-glm.probs)) #mae
+
+confusionMatrix(as.factor(test$target_var),as.factor(glm.class),positive = "1")
+
+#20 most important variables, in decreasing order
+sort(coef(glm.fit),decreasing=TRUE)[1:20]
+```
+
+## RANDOM FOREST model
+```{r rf, echo=FALSE,message=FALSE}
+###############TRAIN RandomForest
+names(train) = make.names(colnames(train),unique=TRUE)
+
+model_rf<-ranger(formula = target_var~.,data=train,num.trees = 100,mtry = sqrt(dim(train)[2]-1),
+                importance = "permutation",write.forest = TRUE,min.node.size =0.1*dim(train)[1])
+
+rf.probs<-predict(model_rf,test,type = "response")$predictions #predict
+rf.class<-ifelse(rf.probs<0.5,0,1)
+
+#model performances
+brier_score_rf = sqrt(mean((test$target_var-rf.probs)^2))
+mean(rf.class==test$target_var) #accuracy
+mean(abs(test$target_var-rf.probs)) #mae
+
+confusionMatrix(as.factor(test$target_var),as.factor(rf.class),positive = "1")
+
+#20 most important variables, in decreasing order
+#var importance
+var_imp<-sort(model_rf[["variable.importance"]],decreasing=TRUE)[1:20]
+par(mar=c(2,15,2,2))
+barplot(var_imp, horiz = TRUE, las = 1,col="light blue",cex.names=.75,
+        main="RF 20 most important features")
+```
+
+## CALCULATE probability increment
+```{r probs, echo=FALSE, message=FALSE}
+#most importannt skills
+critical_skills<-names(sort(exp(coef(glm.fit)),decreasing=TRUE)[1:20])
+dev_skills<-critical_skills[c(2,4,8,10,12)]
+
+######################Get the probabilities increment
+#fabricate a set for prediction
+subset_nonit<-test[test$target_var==0, ][c(2,60,102),] #test 3 nonit profiles
+
+#probs before aqcuiring IT skills
+subset_nonit[,names(subset_nonit)%in%dev_skills]<-0 #devs skills=0
+
+rf.probs0<-predict(glm.fit,subset_nonit,type = "response")
+
+#rf.probs0<-predict(model_rf,subset_nonit,type = "response")$predictions #RF prediction
+
+######
+subset_nonit[,names(subset_nonit)%in%dev_skills]<-1 #critical skills=1
+
+#probs after acquiring IT skills
+rf.probs1<-predict(glm.fit,subset_nonit,type = "response")
+#rf.probs1<-predict(model_rf,subset_nonit,type = "response")$predictions
+
+#####probs_increment
+rf.probs1-rf.probs0
+```
+
+## PARAMETERS TUNING FOR RANDOM FOREST
+```{r tune, echo=FALSE, message=FALSE}
+#ref: https://stackoverflow.com/questions/57939453/building-a-randomforest-with-caret
+library(caret) 
+
+train1<-train
+
+set.seed(1234)
+cv_folds <- createFolds(train1$target_var, k = 3, returnTrain = TRUE)
+
+ctrl <- trainControl(method = "cv",
+                     number = 5,
+                     search = 'grid',
+                     classProbs = TRUE,
+                     savePredictions = "final",
+                     index = cv_folds,
+                     summaryFunction = twoClassSummary)
+
+tuneGrid <- expand.grid(.mtry = c(25,35,45))
+ntrees <- c(300, 800)    
+nodesize <- seq(100,300,100)
+
+params <- expand.grid(ntrees = ntrees,
+                      nodesize = nodesize)
+
+#########grid search
+names(train1) = make.names(colnames(train1),unique=TRUE)
+
+train1$target_var<-as.factor(train1$target_var)
+levels(train1$target_var) <- c("nondev", "dev") #has to change level names coz caret can't take 0 1
+
+store_maxnode <- vector("list", nrow(params))
+for(i in 1:nrow(params)){
+        nodesize <- params[i,2]
+        ntree <- params[i,1]
+        set.seed(65)
+        rf_model <- train(target_var~.,
+                          data = train1,
+                          method = "rf",
+                          importance=TRUE,
+                          metric = "ROC",
+                          tuneGrid = tuneGrid,
+                          trControl = ctrl,
+                          ntree = ntree,
+                          nodesize = nodesize)
+        store_maxnode[[i]] <- rf_model
+}
+names(store_maxnode) <- paste("ntrees:", params$ntrees,
+                              "nodesize:", params$nodesize)
+
+#get the best combination
+lapply(store_maxnode, function(x) x$best)
+
+#get the best combination based on ROC
+lapply(store_maxnode, function(x) x$results[x$results$ROC == max(x$results$ROC),])
+```
+
+##PLOT ROC CURVE, ACCURACY AND ERROR RATES GRAPH
+```{r plot, message=F, warning=F}
+library(MLmetrics)
+library(tidyr)
+library(ggplot2)
+
+prediction<-list(glm.class,rf.class)
+probability<-list(glm.probs,rf.probs)
+
+# Obtain accuracy, recall, and f1 for each train and test set
+test_performance<-data.frame()
+
+for (p in prediction){
+        accuracy<-round(Accuracy(p,test$target_var),3)
+        recall<-round(Recall(p,test$target_var),3)
+        f1<-round(F1_Score(p,test$target_var),3)
+        test_performance<-rbind(test_performance,c(accuracy,recall,f1))
+}
+
+test_error<-data.frame()
+for (prob in probability) {
+        brier_score<- round(sqrt(mean((test$target_var-prob)^2)),3)
+        mae<-round(mean(abs(test$target_var-prob)),3)
+        test_error<-rbind(test_error,c(brier_score,mae))
+}
+
+test_performance<-cbind(test_performance,test_error)
+names(test_performance)<-c("Accuracy_test","Recall_test","F1_test", "brier_score","mae")
+test_performance<-cbind(Model=c("GLM","Random Forest"), test_performance)
+
+#### plot performance
+test_metrics<- test_performance %>% pivot_longer(names_to = "accuracy_metrics", values_to = "Value", Accuracy_test:F1_test)
+
+ggplot(test_metrics, aes(accuracy_metrics, Value, fill = Model)) + 
+        geom_col(position = "dodge")+
+        geom_text(aes(label = Value, y = Value + 0.02), position = position_dodge(0.9), vjust = 0)+
+        geom_hline(yintercept=0.5, linetype="dashed", color = "blue")+
+        ggtitle("Accuracy metrics on the test set")+ylim(0,1)
+
+#### plot error rates
+test_metrics<- test_performance %>% pivot_longer(names_to = "error_metrics", values_to = "Value", brier_score:mae)
+
+ggplot(test_metrics, aes(error_metrics, Value, fill = Model)) + 
+        geom_col(position = "dodge")+
+        geom_text(aes(label = Value, y = Value + 0.02), position = position_dodge(0.9), vjust = 0)+
+        geom_hline(yintercept=0.5, linetype="dashed", color = "blue")+
+        ggtitle("Error rates on the test set")+ylim(0,1)
+```
+
+##PLOT ROC CURVE
+```{r roc, message=F, warning=F}
+library(pROC)
+library(ROCR)
+
+ROC_glm <- performance(prediction(glm.class,test$target_var),"tpr","fpr")
+ROC_rf <- performance(prediction(rf.class,test$target_var),"tpr","fpr")
+glm_auc <- performance(prediction(glm.class,test$target_var),"auc")
+rf_auc <- performance(prediction(rf.class,test$target_var),"auc")
+
+plot(ROC_glm, col = "blue")
+plot(ROC_rf, col = "red",add=TRUE)
+abline(0, 1, col = "grey")
+legend("bottomright", 
+       paste("glm_auc:",paste(round(as.numeric(glm_auc@y.values), digits = 2)),";rf_auc:", 
+       paste(round(as.numeric(rf_auc@y.values), digits = 2))))
+legend( x="topleft", 
+        legend=c("glm","rf"),
+        col=c("blue","red"), lwd=1, 
+        pch=c(NA,NA) )
+```
