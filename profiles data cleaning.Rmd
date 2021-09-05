@@ -1,7 +1,7 @@
 ---
-title: "Talent matching modelling"
-author: "Thuan Yen Tran"
-date: "9/5/2021"
+title: "Talent matching data cleaning"
+author: "Thuan"
+date: "4/5/2021"
 output: html_document
 ---
 
