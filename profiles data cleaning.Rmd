@@ -1,0 +1,159 @@
+---
+title: "Talent matching modelling"
+author: "Thuan Yen Tran"
+date: "9/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##STEP 1: import json data + create big talent_bigset
+```{r 1}
+rm(list=ls())
+options(scipen=999)
+gc()
+
+# Load packages
+library(data.table)
+library(RJSONIO)
+library(mltools)
+library(dplyr)
+
+# Read the json file
+json_file <- "C:/Users/ASUS/OneDrive/Talent matching project/profiles.json"
+
+lines = readLines(json_file)
+record_starts = grep('"id"',lines)
+
+#Create talent_bigset to store later outputs from for loop
+talent_bigset=data.table()
+
+#FOR LOOP: Load each record, make it into data.table format and bind it
+talent_pool = data.table()
+for(id in 1:10000){ #sample with the first 10000 profiles
+  
+  talent_sample = RJSONIO::fromJSON(paste(lines[record_starts[id]:(c(record_starts,length(lines)+1)[id+1]-1)],collapse=""))
+  temp = lapply(talent_sample,function(x){unlist(x)})
+  if (("classification.function_type" %in% names(temp$work_experiences))==FALSE | length(temp$skills)==0) next
+  if(is.na(temp$work_experiences[["classification.function_type"]])==TRUE) next
+  temp = temp[!names(temp)%in% c("location","educations","languages","certificates")]
+  temp = temp[sapply(temp ,length)>0]
+  
+      temp$skills=  temp$skills[names(temp$skills)=="skill"]
+      temp$skills = table(paste(names(temp$skills),temp$skills,sep = "___"))
+      
+      #clean work experience and split into jobs-eras - defined by the `title` label
+      x = stack(as.list(temp$work_experiences))
+      x=x[x$ind =="classification.function_type" | x$ind =="start_date" | x$ind =="end_date",]
+      x$ind = as.character(unlist(x$ind))
+      for(k in 1:length(grep('classification.function_type',x$ind))){
+        x$ind[grep('classification.function_type',x$ind)[k]:(c(grep('classification.function_type',x$ind),length(x$ind)+1)[k+1]-1)] = 
+          paste(x$ind[grep('classification.function_type',x$ind)[k]:(c(grep('classification.function_type',x$ind),length(x$ind)+1)[k+1]-1)],k,sep="___")
+      }
+      x = with(x, split(values, ind))
+      temp$work_experiences = as.data.table(x)
+    temp = as.data.table(t(unlist(temp)))
+    talent_pool = bind_rows(talent_pool,temp)
+}  
+
+talent_bigset<-bind_rows(talent_pool, talent_bigset)
+```
+
+##STEP 2: Create a function to systematically query the targetted profiles
+```{r 2}
+extract_profiles<-function(talent_pool,roles){
+  talent_pool[is.na(talent_pool$working_years),"working_years"]<-0
+  talent_junior <- talent_pool[, working_years:=as.numeric(working_years)]
+  talent_junior<-talent_junior[talent_junior$working_years<=5,]
+  
+  #find columns that contain position titles of the talents
+  cols <- names(talent_junior)[grep("work_experiences.classification.function_type___", names(talent_junior))]
+  
+  #for loop to find all profiles containing the title keywords
+  profiles<-data.table()
+  for (c in cols){
+    for (role in roles){
+      x<-talent_junior[talent_junior[[c]] %like% role]
+      profiles<-rbind(profiles,x)
+    }
+  }
+  
+  # remove duplicates
+  profiles<-distinct(profiles,id,.keep_all = TRUE)
+  # remove completely null columns
+  profiles <- profiles[ ,colSums(is.na(profiles))<nrow(profiles), with=FALSE] 
+  
+  #remove redundant columns
+  rm<-c("work_experiences.classification.function_type",
+        "work_experiences.end_date","work_experiences.start_date")
+  remove_cols<-c()
+  for (c in rm){
+    columns<-names(profiles)[grep(c, names(profiles))]
+    remove_cols<-append(remove_cols,columns)
+  }
+  
+  profiles<-profiles[,!names(profiles) %in% remove_cols,with=FALSE]
+  profiles[is.na(profiles)] <- 0
+  
+  #convert columns to the right type: numeric
+  numeric_cols<-names(profiles)[names(profiles)!="id"]
+  profiles[,(numeric_cols) := lapply(.SD, as.integer),.SDcols = numeric_cols]
+  profiles<-profiles[ ,colSums(profiles[,..numeric_cols])!=0, with=FALSE]
+  
+  return(profiles)
+}
+```
+
+##STEP 3: Query for the targetted profiles
+```{r 3}
+# profile taxonomy
+analyst<-c("data analyst", "data analist", "data specialist", "data", "business intelligence")
+
+it<-c("business analist","project manager","business analyst",
+      "product_owner","ux designer", "user experience")
+
+devs<-c("developer","software engineer","programmer")
+
+nonit<-c("sales","business manager")
+
+## Extract dev profiles
+profiles_dev<-extract_profiles(talent_pool = talent_bigset,roles = devs)
+  ### Filter for the skills that appear in at least x% of all the profiles
+profiles_dev<-profiles_dev[,colSums(profiles_dev[,-1])>0.05*nrow(profiles_dev),with=FALSE]
+profiles_dev$target_var<-rep(1,nrow(profiles_dev)) #assign label=1 to dev profiles
+
+## Extract other profiles
+profiles_it<-extract_profiles(talent_pool = talent_bigset,roles = it)
+profiles_analyst<-extract_profiles(talent_pool = talent_bigset,roles = analyst)
+profiles_nonit<-extract_profiles(talent_pool = talent_bigset,roles = nonit)
+
+profiles_others<-bind_rows(profiles_it, profiles_analyst, profiles_nonit)
+  ### Filter for the skills that appear in at least x% of all the profiles
+profiles_others<-profiles_others[,colSums(profiles_others[,-1])>0.05*nrow(profiles_others),with=FALSE]
+profiles_others$target_var<-rep(0,nrow(profiles_others)) #assign label=0 to other profiles
+
+## Filter for the skills that appear in at least x% of all the profiles
+profiles<-profiles[,colSums(profiles[,-1])>0.05*nrow(profiles),with=FALSE]
+
+## Combine individual data tables into one
+profiles_final<-bind_rows(profiles_dev, profiles_others)
+```
+
+## Save to csv
+```{r 5}
+write.csv(profiles_final,"profiles_final.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
